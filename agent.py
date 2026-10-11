@@ -38,27 +38,16 @@ from langchain_core.prompts import PromptTemplate
 from rag import query_rag
 from rag_tool import policy_search_tool
 
-# The generator model required by the exercise.  Temperature 0 keeps the model
-# close to the retrieved text instead of paraphrasing creatively.
-#
-# No ``stop`` parameter is passed: ``create_react_agent`` already binds
-# ``stop=["\nObservation"]``, and supplying it again raises
-# "`stop` found in both the input and default params".
+
 agent_llm = Ollama(model="qwen3:0.6b", temperature=0.0)
 
-# Tool available to the agent.  The names and description below are injected
-# into the ReAct prompt and scratchpad built in :func:`run_agent`.
+
 tools = [policy_search_tool]
 TOOL_NAME = policy_search_tool.name
 TOOL_NAMES = ", ".join(tool.name for tool in tools)
 TOOL_DESCRIPTION = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
 
-# The ReAct prompt.  The rules are deliberately split into the two cases the
-# Observation can be in, because ``qwen3:0.6b`` tends to answer "I don't know"
-# whenever the instructions are phrased as prohibitions alone.  Stating the
-# refusal contract -- contact details may only be copied from the Observation,
-# and "I don't know" is the correct answer when they are absent -- is what stops
-# the model inventing a number.
+
 react_prompt = PromptTemplate.from_template(
     """Answer the user's question using ONLY the Observation below.
 
@@ -95,7 +84,7 @@ Question: {input}
 Thought:{agent_scratchpad}"""
 )
 
-# ReAct agent and executor: the scaffold required by the exercise.
+
 agent = create_react_agent(agent_llm, tools, react_prompt)
 
 agent_executor = AgentExecutor(
@@ -107,8 +96,7 @@ agent_executor = AgentExecutor(
     return_intermediate_steps=False,
 )
 
-# Word and number patterns used to verify that the agent stayed grounded in the
-# tool output.
+
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _PHONE_RE = re.compile(r"\d(?:[\d\s\-().]*\d){4,}")
 _REFUSAL_RE = re.compile(
@@ -145,10 +133,10 @@ def run_agent(user_question: str) -> str:
     deterministic no-hallucination guard: it never contains a phone number the
     policy documents do not state.
     """
-    # Deterministic tool call -- the same function the ReAct tool wraps.
+    
     tool_output = query_rag(user_question)
 
-    # The tool has now really run; the agent only phrases the final answer.
+    
     try:
         result = agent_executor.invoke(
             {
@@ -158,13 +146,11 @@ def run_agent(user_question: str) -> str:
         )
         agent_output = result.get("output", "") if isinstance(result, dict) else str(result)
     except Exception:
-        # The model could not be reached or failed the ReAct format.  Returning
-        # the guarded tool answer is always safe: it never invents a fact.
+       
         return tool_output
 
     final_answer = (agent_output or "").strip()
 
-    # Accept the agent's phrasing only when it is supported by the tool output.
     if _is_grounded(final_answer, tool_output):
         return final_answer
 

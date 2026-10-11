@@ -46,28 +46,19 @@ from langchain_core.runnables import RunnablePassthrough
 
 from policy_loader import load_policy_documents
 
-# OllamaLLM lives in the standalone package on new LangChain releases and in
-# langchain_community on the version installed here; both classes are call
-# compatible (OllamaLLM is the rename of Ollama).
 try:  # pragma: no cover - depends on the installed distribution
     from langchain_ollama import OllamaLLM as Ollama
 except ImportError:  # the path taken in this environment
     from langchain_community.llms import Ollama
 
-# --------------------------------------------------------------------------- #
-# 1. Load the knowledge base.
-#    The exercise requires exactly this call: load_policy_documents().
-# --------------------------------------------------------------------------- #
+
 documents = load_policy_documents()
 
-# --------------------------------------------------------------------------- #
-# 2. Embedding model (see module docstring for why this is not Ollama).
-# --------------------------------------------------------------------------- #
+
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 EMBED_DIM = 1024
 
-# High-frequency English words carry no retrieval signal; without this list the
-# stopwords shared by every policy would dominate the cosine similarity.
+
 STOPWORDS = frozenset(
     """
     a an and are as at be before by can cannot could do does for from had has have
@@ -136,15 +127,9 @@ class TfidfHashEmbeddings(Embeddings):
 
 embeddings = TfidfHashEmbeddings().fit([doc.page_content for doc in documents])
 
-# --------------------------------------------------------------------------- #
-# 3. Vector store and retriever.
-# --------------------------------------------------------------------------- #
+
 vector_store = Chroma.from_documents(documents=documents, embedding=embeddings)
 
-# The corpus repeats near-identical policy variants, so the single block that
-# holds a specific fact can sit just below the top generic matches.  k=8 gives
-# enough recall for those specific facts while staying inside the context window
-# of a 0.6B model.
 retriever = vector_store.as_retriever(search_kwargs={"k": 8})
 
 
@@ -160,10 +145,6 @@ def format_docs(docs) -> str:
     )
 
 
-# --------------------------------------------------------------------------- #
-# 4. Prompt.  Grounding is enforced in the instructions and again after
-#    generation by the guard further down.
-# --------------------------------------------------------------------------- #
 rag_prompt = ChatPromptTemplate.from_template(
     """You are a university IT policy assistant. Answer the question using ONLY the policy context below.
 
@@ -183,9 +164,7 @@ Question: {question}
 Answer:"""
 )
 
-# --------------------------------------------------------------------------- #
-# 5. Generator model required by the exercise, then the chain.
-# --------------------------------------------------------------------------- #
+
 llm = Ollama(model="qwen3:0.6b", temperature=0.0)
 
 rag_chain = (
@@ -195,15 +174,7 @@ rag_chain = (
     | StrOutputParser()
 )
 
-# --------------------------------------------------------------------------- #
-# 6. Refusal wording.
-#
-#    The knowledge base is the only source of truth, and it contains no phone
-#    number at all, so "I don't know" is the complete and correct answer to the
-#    Service Desk question.  The refusal therefore states the lack of
-#    information and stops -- it must not add instructions, alternatives, or
-#    contact details the documents never supplied.
-# --------------------------------------------------------------------------- #
+
 PHONE_REFUSAL = (
     "I don't know the exact phone number for the University IT Service Desk. "
     "The IT policy documents provided do not contain a Service Desk phone "
@@ -215,36 +186,23 @@ GENERIC_REFUSAL = (
     "information needed to answer that question."
 )
 
-# --------------------------------------------------------------------------- #
-# 7. Post-generation guard.
-#
-#    A 0.6B model can still emit a plausible-looking number even when the
-#    context has none, so every answer is verified against the retrieved
-#    context before it is returned.  This is what turns "should not hallucinate"
-#    into "cannot hallucinate".
-# --------------------------------------------------------------------------- #
-# A digit run long enough to be written as a phone number / extension.  A real
-# phone number carries at least 5 digits, so short quantities such as
-# "15 minutes" or "2 GB" are not mistaken for one.
+
 PHONE_DIGITS_RE = re.compile(r"\d(?:[\d\s\-().]*\d){4,}")
-# The same, spelled out in words ("zero one two ...").
 SPELLED_DIGITS_RE = re.compile(
     r"(?i)\b(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)"
     r"(?:[\s\-]+(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)){4,}\b"
 )
-# Every run of digits in a text, including single digits, so that a number of
-# any length can be checked against the context.
+
 DIGIT_RUN_RE = re.compile(r"\d[\d\s\-().]*\d|\d")
-# Words that make a question a request for contact details.  "call" is
-# deliberately absent: "which printer do I call from" is not a phone question.
+
 PHONE_WORD_RE = re.compile(r"(?i)\b(?:phone|telephone|hotline|dial|extension|ext)\b")
-# A refusal produced by the model itself (rule 3 of the prompt).
+
 BARE_REFUSAL_RE = re.compile(
     r"(?i)^\W*(?:i\s+(?:do\s+not|don't|dont)\s+know|i\s+(?:am|'m)\s+not\s+sure|"
     r"i\s+(?:cannot|can't|can not)|the\s+(?:context|documents?|polic(?:y|ies))|"
     r"no\s+information|unknown|not\s+(?:available|provided|specified|mentioned))\b"
 )
-# Small models sometimes wrap their reasoning in these markers.
+
 THINK_BLOCK_RE = re.compile(r"(?is)<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>")
 
 
@@ -333,22 +291,17 @@ def query_rag(question: str) -> str:
     try:
         answer = answer_question(question)
     except Exception:
-        # The model could not be reached.  Refusing is always safe: it neither
-        # invents a fact nor produces a number the documents do not contain.
+        
         return _refusal_for(question)
 
     if not answer:
         return _refusal_for(question)
 
-    # The model refused in its own words.  Replacing that with the canonical
-    # sentence keeps the wording consistent and keeps the answer free of any
-    # advice the model may have appended.
+    
     if BARE_REFUSAL_RE.match(answer):
         return _refusal_for(question)
 
-    # Hard guard: no phone number may appear in the answer unless the retrieved
-    # context states one, and no digit may appear that the context does not
-    # support.  This is the anti-hallucination backstop for the phone question.
+    
     if not _mentions_phone_number(context):
         if _mentions_phone_number(answer) or _unsupported_digits(answer, context):
             return _refusal_for(question)
